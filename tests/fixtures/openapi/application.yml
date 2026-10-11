@@ -1,0 +1,11 @@
+# A made-up Spring Boot config with an `openapi:` section of its own: not a spec.
+spring:
+  application:
+    name: bookshop
+openapi:
+  title: Bookshop API
+  version: 2.1
+  dev-url: http://localhost:8080
+springdoc:
+  api-docs:
+    path: /v3/api-docs

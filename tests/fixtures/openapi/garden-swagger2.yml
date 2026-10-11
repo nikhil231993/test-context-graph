@@ -1,0 +1,84 @@
+swagger: '2.0'
+info:
+  title: Garden
+  version: 1.0.0
+host: garden.example
+basePath: /garden/v1/
+paths:
+  /plants:
+    get:
+      tags:
+        - plants
+      operationId: findPlants
+      parameters:
+        - name: kinds
+          in: query
+          type: array
+          items:
+            type: string
+        - $ref: '#/parameters/Limit'
+      responses:
+        200:
+          description: The plants.
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Plant'
+    post:
+      tags:
+        - plants
+      operationId: addPlant
+      parameters:
+        - name: plant
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/Plant'
+      responses:
+        201:
+          description: Added.
+          schema:
+            $ref: '#/definitions/Plant'
+        400:
+          description: Invalid plant.
+  /plants/{plantId}/photo:
+    post:
+      operationId: uploadPhoto
+      consumes:
+        - multipart/form-data
+      parameters:
+        - name: plantId
+          in: path
+          required: true
+          type: integer
+        - name: photo
+          in: formData
+          type: file
+      responses:
+        204:
+          description: Uploaded.
+parameters:
+  Limit:
+    name: limit
+    in: query
+    type: integer
+definitions:
+  Plant:
+    type: object
+    required:
+      - name
+    properties:
+      id:
+        type: integer
+        format: int64
+      name:
+        type: string
+      tags:
+        type: array
+        items:
+          $ref: '#/definitions/Tag'
+  Tag:
+    type: object
+    properties:
+      label:
+        type: string

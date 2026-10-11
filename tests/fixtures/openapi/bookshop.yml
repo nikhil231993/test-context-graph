@@ -1,0 +1,184 @@
+openapi: 3.0.3
+info:
+  title: Bookshop
+  description: A made-up bookshop API for tests.
+  version: '2.1'
+servers:
+  - url: https://{region}.bookshop.example/{basePath}/
+    variables:
+      region:
+        default: eu
+      basePath:
+        default: shop/v2
+  - url: http://localhost:8080/ignored
+paths:
+  /books:
+    get:
+      tags:
+        - books
+      operationId: listBooks
+      summary: Lists books
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - name: tag
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        200:
+          description: The books.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Book'
+    post:
+      tags:
+        - books
+      operationId: addBook
+      requestBody:
+        $ref: '#/components/requestBodies/NewBook'
+      responses:
+        '201':
+          description: The book was added.
+          content:
+            application/xml:
+              schema:
+                type: string
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        default:
+          $ref: '#/components/responses/Problem'
+  /books/{bookId}:
+    x-owner: catalogue-team
+    parameters:
+      - $ref: '#/components/parameters/BookId'
+      - name: X-Request-Id
+        in: header
+        schema:
+          type: string
+    get:
+      tags:
+        - books
+      operationId: getBook
+      description: |
+        Returns one book.
+        Its reviews are included.
+      responses:
+        200:
+          description: The book.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Book'
+                  - type: object
+        404:
+          description: No such book.
+    put:
+      tags:
+        - books
+      operationId: replaceBookText
+      parameters:
+        - name: X-Request-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          text/plain:
+            schema:
+              type: string
+      responses:
+        204:
+          description: Replaced.
+    delete:
+      operationId: deleteBook
+      responses:
+        204:
+          description: Deleted.
+components:
+  parameters:
+    BookId:
+      name: bookId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    PageSize:
+      name: size
+      in: query
+      schema:
+        type: integer
+  requestBodies:
+    NewBook:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/BookFields'
+  responses:
+    Problem:
+      description: Something went wrong.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    BookFields:
+      type: object
+      properties:
+        title:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        prices:
+          type: object
+          additionalProperties:
+            type: number
+      required:
+        - title
+    Book:
+      description: A book with its id and reviews.
+      allOf:
+        - $ref: '#/components/schemas/BookFields'
+        - type: object
+          properties:
+            id:
+              type: integer
+            reviews:
+              type: array
+              items:
+                $ref: '#/components/schemas/Review'
+          required:
+            - id
+    Review:
+      type: object
+      properties:
+        stars:
+          type: integer
+        on:
+          type: boolean
+        body:
+          oneOf:
+            - type: string
+            - $ref: '#/components/schemas/RichText'
+    RichText:
+      type: object
+      properties:
+        html:
+          type: string
+    Problem:
+      type: object
+      properties:
+        detail:
+          type: string

@@ -1,0 +1,9 @@
+version: "3.8"
+services:
+  bookshop:
+    image: example/bookshop:latest
+    labels:
+      openapi: 3.0.3
+      swagger: "2.0"
+    environment:
+      - SWAGGER_UI_ENABLED=true
