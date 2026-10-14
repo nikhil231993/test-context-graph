@@ -116,26 +116,82 @@ write graph and manifest. A second run on an unchanged repo embeds nothing.
 
 ## 7. Context engine, CLI, MCP server: `context.py`, `cli.py`, `server.py` and their tests
 
-- `ContextEngine(index_dir, embedder=None)`:
-  - `resolve(symbol)`: accepts a node id, a qualified or simple type name, `Type#method`,
-    `Type.method`, a method name, a file path, or `GET /owners/{id}`; returns ranked candidates.
-  - `test_context(symbol)`: the main answer, JSON-ready. Target (source, signature, role); its
-    class outline; dependencies to mock (INJECTS, with the methods the target calls on each);
-    data types from USES with their fields, or for generated DTOs the OpenAPI schema properties
-    via GENERATED_FROM; endpoints served (served_path, parameters, request/response, tests already
-    hitting them); existing tests (direct TESTS, plus those of interfaces it implements and
-    abstract bases), with their setup (annotations, mocked types) and one or two example test
-    methods; implementations and profiles for interfaces; conventions (framework, `*Tests` naming,
-    suggested test file path); related docs by vector search; notes.
-  - `search(query, kinds, limit)`, `get_node(symbol)`, `neighbors(id, edge_kinds, direction)`,
-    `find_tests(symbol)`, `stats()`.
-- `tcg` CLI: `index <repo> [--index .tcg] [--full] [--embedder fastembed|hash]`, `context <symbol>
-  [--json]`, `search <query>`, `tests <symbol>`, `show <id>`, `stats`.
-- `tcg-mcp` (stdio, FastMCP): `get_test_context`, `search_code`, `get_node`, `get_neighbors`,
-  `find_tests`, `index_status`; index folder from env `TCG_INDEX` (default `.tcg`).
-- Done when: tests run against a small made-up repo indexed with `HashEmbedder`; on petclinic,
-  `tcg context OwnerRestControllerV1#getOwner` names ClinicService as the mock, OwnerDto with the
-  Owner schema fields, GET /api/owners/{ownerId}, and OwnerRestControllerTests as the example.
+The product's main promise: one call, `get_test_context(symbol)`, gives a coding agent everything
+it needs to write a good test for that symbol. Build on: `IndexStore` (read_graph, read_meta,
+read_manifest, get_chunks, search, count_chunks), `embeddings` (FastEmbedEmbedder, HashEmbedder,
+default_embedder), `indexer.index_repo`, `graph.match_url`/`type_role`. Tests index the made-up
+app `tests/fixtures/bookshop` (copied to a tmp dir) with `HashEmbedder` in a module- or
+session-scoped fixture. `pyproject.toml` already declares `tcg` and `tcg-mcp`.
+
+### context.py
+`ContextEngine(index_dir, embedder=None)`: loads the graph once (in-memory adjacency by edge kind,
+both directions). The embedder is created lazily, only for vector search, and matches the index:
+the manifest's embedding_model ("hash-<dim>" -> HashEmbedder(dim), else FastEmbedEmbedder(model))
+unless one is passed. A missing index gives a clear error: run `tcg index <repo>`.
+
+- `resolve(symbol) -> list[Node]`, ranked: a node id; a qualified or simple type name;
+  `Type#method`, `Type.method`, `Type#method(String)`; a bare method name; a file path (-> its
+  types); an endpoint "GET /owners/{id}" or a served/url path. Ambiguity returns several
+  candidates, which callers report instead of guessing silently.
+- `test_context(symbol, max_tests=3, max_docs=3) -> dict` (JSON-ready), for a method (or a type:
+  the whole class):
+  - target: id, kind, signature, role, path + lines, source (chunk text).
+  - enclosing type: outline chunk text, role, annotations, profiles.
+  - dependencies to mock: types it INJECTS (via, name), each with the methods the target CALLS on
+    it (signatures); interfaces marked.
+  - collaborators called: resolved CALLS from the target (signature, resolution), minus the above.
+  - data types from USES: fields for project types; for generated DTO stubs, the OpenAPI schema
+    properties/required via GENERATED_FROM (how an agent learns OwnerDto's fields).
+  - endpoints SERVED (by the method, or the type's methods): http_method, served_path, url_path,
+    operation_id, summary, parameters, request_body, responses, and the test methods already
+    hitting it (TESTS reason http).
+  - existing tests: TESTS into the target, its type, the interfaces it implements and the methods
+    it overrides (ClinicServiceImpl finds AbstractClinicServiceTests via ClinicService), plus
+    subclasses of abstract test bases with their active_profiles. For up to max_tests test types:
+    path, annotations, setup fields with annotations (@Autowired subject, @MockitoBean mocks),
+    MOCKS, and the source of one or two test methods most related to the target (prefer TESTS
+    edges to the target or its endpoints).
+  - implementations: for an interface target or dependency, implementing types and profiles.
+  - conventions: frameworks seen in the tests (JUnit 5, Mockito/BDDMockito, MockMvc, AssertJ,
+    Spring Boot test annotations), dominant suffix ("Tests" vs "Test"), a suggested test file
+    path (mirror the package under src/test/java; if a test class exists, say to add to it).
+  - related docs: top max_docs doc chunks by vector search on name + signature + javadoc.
+  - notes: e.g. "OwnerDto is generated at build time from schema Owner", ambiguous candidates.
+  - Bounded: long sources truncated (~4,000 chars), list lengths capped.
+- `render_markdown(context) -> str`: compact Markdown for an LLM or a terminal.
+- `search(query, kinds=None, limit=10)` (hits with id, kind, name, path, lines, score, snippet);
+  `get_node(symbol)` (node + chunk text + edge counts); `neighbors(node_id, edge_kinds=None,
+  direction="both", limit=50)`; `find_tests(symbol)`; `stats()` (manifest counts, index age,
+  repo name/commit, embedding model).
+
+### cli.py (`tcg`, argparse)
+`tcg index <repo> [--index DIR] [--full] [--embedder fastembed|hash]` (progress on stderr, then a
+summary: files added/changed/removed, chunks embedded/deleted, counts, warnings, seconds);
+`tcg context <symbol> [--json]` (Markdown by default); `tcg search <query> [--kind K]... [--limit N]
+[--json]`; `tcg tests <symbol> [--json]`; `tcg show <symbol> [--json]`; `tcg stats [--json]`.
+`--index` defaults to env TCG_INDEX or ".tcg". Errors -> stderr message, exit code 1/2, no traceback.
+
+### server.py (`tcg-mcp`, FastMCP, stdio)
+Tools: `get_test_context(symbol, format="markdown", max_tests=3)` (Markdown string by default, the
+dict for "json"), `search_code(query, kinds=None, limit=10)`, `get_node(symbol)`,
+`get_neighbors(node_id, edge_kinds=None, direction="both", limit=50)`, `find_tests(symbol)`,
+`index_status()`. Index folder from env TCG_INDEX (default ".tcg"); engine created lazily and
+reused. Docstrings say what each tool returns and when to use it (get_test_context first for
+writing tests). Tests call the tool functions directly.
+
+### Done when
+Tests pass (full suite too), and on the real demo index in `.tcg/` (built with the real model):
+- `tcg context OwnerRestControllerV1#getOwner`: dependencies include ClinicService (with
+  findOwnerById) and OwnerMapper; data types include OwnerDto with the Owner schema fields;
+  endpoint GET /owners/{ownerId} with served_path /api/owners/{ownerId}; existing tests include
+  OwnerRestControllerV1Tests with its @MockitoBean ClinicService setup and a getOwner-related test
+  method; a suggested test path.
+- `tcg context ClinicServiceImpl#findOwnerById`: OwnerRepository to mock; AbstractClinicServiceTests
+  found through ClinicService, with its profile subclasses.
+- `tcg search "validate pet birth date"` and `tcg stats` work; `tcg context` well under 2 s apart
+  from loading the model for docs.
+- The Markdown output of the first two saved to `examples/petclinic-getOwner-context.md` and
+  `examples/petclinic-findOwnerById-context.md` (open-source demo output, fine to commit).
 
 ## 8. Run on petclinic and polish
 

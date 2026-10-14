@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import pytest
+from pathlib import Path
 
 from test_context_graph.embeddings import (
     BGE_QUERY_INSTRUCTION,
@@ -254,3 +255,11 @@ def test_fastembed_embedder_with_the_real_model():
     assert norm(query) == pytest.approx(1.0, abs=1e-5)
     assert norm(related) == pytest.approx(1.0, abs=1e-5)
     assert cosine(query, related) > cosine(query, unrelated)
+
+
+def test_models_are_cached_in_a_fixed_folder(monkeypatch, tmp_path):
+    monkeypatch.delenv("TCG_MODEL_CACHE", raising=False)
+    assert FastEmbedEmbedder().cache_dir == Path.home() / ".cache" / "test-context-graph" / "models"
+    monkeypatch.setenv("TCG_MODEL_CACHE", str(tmp_path / "models"))
+    assert FastEmbedEmbedder().cache_dir == tmp_path / "models"
+    assert FastEmbedEmbedder(cache_dir=tmp_path / "x").cache_dir == tmp_path / "x"

@@ -3,6 +3,7 @@ name = "test-context-graph"
 version = "0.1.0"
 description = "A context graph of a Java Spring codebase (code, API specs, tests, docs) that helps coding agents write tests"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "tree-sitter>=0.23",

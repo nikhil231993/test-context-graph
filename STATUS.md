@@ -4,7 +4,7 @@ The live handoff file: what's decided, what's done, what's running, what's next.
 first when picking the work up** (a new Claude Code session, Cursor, or a person), and update it
 at every milestone.
 
-_Last updated: 2026-10-11 12:56_
+_Last updated: 2026-10-14 15:05_
 
 ## Goal
 
@@ -36,13 +36,13 @@ target that drove the design: [`docs/demo-target-notes.md`](docs/demo-target-not
 |---|---|---|---|
 | 0 | Scaffold, contract, AGENTS.md, README draft, fetch script | `models.py`, `pyproject.toml`, ... | done |
 | 1 | Survey of the demo target | `docs/demo-target-notes.md` | done |
-| 2 | Java parser | `java_parser.py` + tests | in progress (sub-agent): parser written; tests at 2026-10-11 12:56: 1 failed, 64 passed in 0.17s |
-| 3 | OpenAPI and Markdown parsers | `openapi.py`, `docs.py` + tests | in progress (sub-agent): both modules written; tests at 2026-10-11 12:56: openapi 51 passed in 0.05s, docs 14 passed in 0.02s |
+| 2 | Java parser | `java_parser.py` + tests | **done** (verified by maintainer: tests pass; all 109 demo files parse, 0 errors, 0.09 s; 49% of calls get a receiver_type) |
+| 3 | OpenAPI and Markdown parsers | `openapi.py`, `docs.py` + tests | **done** (verified by maintainer: demo spec gives 37 ops, 17 schemas, base /petclinic/api, no false positives; readme gives 33 sections) |
 | 4 | Embeddings, manifest, store | `embeddings.py`, `manifest.py`, `store.py` + tests | **done** (agent finished; 126 tests pass, 1 real-model test skipped unless `TCG_TEST_FASTEMBED=1`); maintainer code review pending |
-| 5 | Graph builder and chunker | `graph.py`, `chunks.py` + tests | **paused** (stopped to save usage quota before writing any file); restart from its spec when quota allows |
-| 6 | Indexer: connect 2–5, incremental runs | `indexer.py` + tests | todo (maintainer) |
-| 7 | Context engine, CLI, MCP server | `context.py`, `cli.py`, `server.py` + tests | todo (sub-agent) |
-| 8 | Run on petclinic, review, README results, example output | README, `examples/` | todo |
+| 5 | Graph builder and chunker | `graph.py`, `chunks.py` + tests | **done** (57 tests; demo spot checks pass: SERVES, INJECTS, TESTS, MOCKS, GENERATED_FROM) |
+| 6 | Indexer: connect 2–5, incremental runs | `indexer.py` + tests | **done** (7 tests; real run on the demo below) |
+| 7 | Context engine, CLI, MCP server | `context.py`, `cli.py`, `server.py` + tests | **done** (97 tests; demo checks pass for getOwner and findOwnerById, examples/ saved; `tcg context` 0.8 s, 1.0–1.5 s with the docs model) |
+| 8 | Run on petclinic, review, README results, example output | README, `examples/` | **done** (README: quick start, MCP setup, example, results, limitations; examples/ from package 7) |
 | 9 | Evaluation: an agent writes tests with and without the context | `eval/` | later |
 
 "in progress (sub-agent)" means an agent was building it when this file was last updated. If the
@@ -64,6 +64,36 @@ its spec in `docs/work-packages.md`; mark it done here. Then start the first "to
 
 ## Log
 
+- 2026-10-14 14:45: package 7 done by its sub-agent (97 new tests; all "done when" checks pass on the
+  demo; `tcg context` 0.8 s, ~6 ms warm in the MCP server). Fixed a problem it found: the model was
+  cached in the temp folder, so an MCP client's minimal environment downloaded it again; now
+  cached in ~/.cache/test-context-graph/models (TCG_MODEL_CACHE) and loaded offline first.
+  README finished (package 8). 420 tests pass, 1 skipped. Not yet committed since the
+  maintainer's "Initial commit" (2026-10-11 13:01); remote origin is set to the GitHub repo.
+  Open: choose a license; package 9 (evaluation).
+- 2026-10-14 15:05: MIT license added (maintainer's choice). Committed packages 5–8. Next: code
+  review of all modules by two review sub-agents, then package 9 (evaluation) and a CI workflow.
+- 2026-10-14 13:40: resumed. State checked (322 tests pass, demo index intact); package 7 restarted.
+- 2026-10-12, end of day 1: stopped for the day at the maintainer's request. Package 7's agent was
+  stopped while still reading (no files written). State: packages 0–6 done, 322 tests pass
+  (1 skipped), demo index built in .tcg/ with the real model (git-ignored; rebuild with
+  `tcg index` once package 7 exists, or `index_repo` from Python). Nothing committed yet.
+  **Tomorrow:** (1) start package 7 from its full spec in docs/work-packages.md#7 (a sub-agent
+  or directly); (2) package 8: review, README results and usage, examples/; (3) ask the
+  maintainer about committing and pushing to a private GitHub repo.
+- 2026-10-12 00:35: packages 5 and 6 done; 322 tests pass, 1 skipped. Real run on the demo with
+  bge-small: first index 80.6 s (embedding 682 chunks on CPU), unchanged re-run 0.27 s embedding
+  nothing; 113 files -> 885 nodes, 2,639 edges, 682 chunks, 0 parse problems, 3.3 MB in .tcg/.
+  Search works ("find an owner by id" -> GET /owners/{ownerId}, OwnerRepository#findById).
+  Optional contract additions suggested by package 5 (not done): CallSite.class_literals (to see
+  mock(X.class) inside test methods), MethodDecl.type_parameters. Known graph gaps: receiver types
+  only from the same file; Spring Data inherited methods have no nodes; one served_path per endpoint.
+  Package 7 started.
+- 2026-10-11 23:40: indexer written; made-up fixture app `tests/fixtures/bookshop/` added (API-first
+  controller, generated DTO/Api stubs, profiles, abstract test base, MockMvc) for the indexer and package 7 tests.
+- 2026-10-11 23:25: the usage limit stopped agents 2 and 3 during their final self-review (no final
+  reports). Maintainer verified both: 258 tests pass, 1 skipped; real-code checks above. Package 5
+  restarted.
 - 2026-10-11 12:56: agent states saved. Running: 2 (Java parser), 3 (OpenAPI/docs). Done: 1, 4.
   Paused: 5. If the session ends, finish 2 and 3 from their specs: their files are on disk.
 - 2026-10-11: scaffold, contract and demo survey done; sub-agents started on packages 2–5.

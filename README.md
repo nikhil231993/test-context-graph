@@ -18,9 +18,9 @@ method isn't enough. It also needs to know:
 embedded chunks for semantic search, then gives an agent everything above in one call
 (`get_test_context`), through a CLI or an MCP server.
 
-> Status: work in progress. Built as a learning project; indexes the open-source
-> [spring-petclinic-rest](https://github.com/spring-petclinic/spring-petclinic-rest) as its
-> demo.
+Built as a learning project. The demo is the open-source
+[spring-petclinic-rest](https://github.com/spring-petclinic/spring-petclinic-rest): see
+[what an agent gets](#example-what-an-agent-gets) and [the numbers](#results-on-spring-petclinic-rest).
 
 ## How it works
 
@@ -100,3 +100,143 @@ The exact data model is [`src/test_context_graph/models.py`](src/test_context_gr
    sources, dependencies). tree-sitter works on any checkout without building it, and the
    heuristics are recorded on each edge (`resolution`, `reason`), so an agent can tell a sure
    link from a guess.
+
+## Quick start
+
+Python 3.10 or later.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
+
+scripts/fetch-demo.sh                      # clones spring-petclinic-rest into .demo/
+tcg index .demo/spring-petclinic-rest      # writes .tcg/; the first run downloads the model (~70 MB)
+tcg context 'OwnerRestControllerV1#getOwner'
+```
+
+| Command | What it does |
+|---|---|
+| `tcg index <repo> [--full] [--embedder fastembed\|hash]` | Index a repository. Re-runs only re-embed chunks that changed. |
+| `tcg context <symbol> [--json]` | Everything needed to write a test for a method or class |
+| `tcg search <query> [--kind method] [--limit N]` | Search code, endpoints, schemas and docs by meaning |
+| `tcg tests <symbol>` | Existing tests of a symbol, and why each is related |
+| `tcg show <symbol>` | One node: attributes, edges and text |
+| `tcg stats` | What is indexed, when, and with which model |
+
+A symbol can be `Type#method`, `Type.method`, a type name, a node id, a file path or an
+endpoint (`GET /owners/{ownerId}`). The index folder is `.tcg` unless `--index` or `TCG_INDEX`
+says otherwise. Models are cached in `~/.cache/test-context-graph/models` (`TCG_MODEL_CACHE`)
+and load offline once downloaded.
+
+## Use it from an agent (MCP)
+
+`tcg-mcp` is an MCP server (stdio) with six tools: `get_test_context` (the one to call before
+writing a test), `search_code`, `get_node`, `get_neighbors`, `find_tests` and `index_status`.
+
+Claude Code:
+
+```bash
+claude mcp add test-context-graph -- /absolute/path/.venv/bin/tcg-mcp --index /absolute/path/.tcg
+```
+
+Cursor (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "test-context-graph": {
+      "command": "/absolute/path/.venv/bin/tcg-mcp",
+      "args": ["--index", "/absolute/path/.tcg"]
+    }
+  }
+}
+```
+
+Then ask the agent, for example: *"Use get_test_context for OwnerRestControllerV1#getOwner, then
+write its unit test."*
+
+## Example: what an agent gets
+
+From `tcg context 'OwnerRestControllerV1#getOwner'` (shortened; full output in
+[`examples/`](examples/petclinic-getOwner-context.md)):
+
+```
+## Dependencies to mock
+- ClinicService (interface; field `clinicService` via constructor)
+  - calls `Owner findOwnerById(int id) throws DataAccessException`
+  - in tests: mocked in 7 test classes, e.g. OwnerRestControllerV1Tests (@MockitoBean)
+- OwnerMapper (interface, mapper; field `ownerMapper` via constructor)
+  - calls `OwnerDto toOwnerDto(Owner owner)`
+
+## Data types
+- OwnerDto — generated from OpenAPI schema `Owner` (src/main/resources/openapi.yml)
+  - properties (* required): firstName: string*, lastName: string*, address: string*, ...
+
+## Endpoints
+- GET /owners/{ownerId} — operationId `getOwner`: Get a pet owner by ID
+  - served at `/api/owners/{ownerId}` (what MockMvc calls)
+  - responses: 200 Owner · 304 Not modified. · 400 ProblemDetail · 404 ProblemDetail · 500 ...
+  - tested by: OwnerRestControllerV1Tests#testGetOwnerSuccess(), ...#testGetOwnerNotFound()
+
+## Existing tests
+### OwnerRestControllerV1Tests — @SpringBootTest, @MockitoBean ClinicService, MockMvc ...
+```
+
+`OwnerDto` doesn't exist in the source tree: it's generated at build time. The agent still gets
+its fields, from the OpenAPI schema it's generated from. For a service method,
+[`ClinicServiceImpl#findOwnerById`](examples/petclinic-findOwnerById-context.md) lists the
+repository to mock and finds the existing tests through the `ClinicService` interface: an
+abstract test class run under four database profiles.
+
+## Results on spring-petclinic-rest
+
+| | |
+|---|---|
+| Indexed | 113 files (109 Java, 1 OpenAPI spec, 3 Markdown), no parse errors |
+| Graph | 885 nodes, 2,639 edges (695 CALLS, 370 TESTS, 37 SERVES: every implemented operation) |
+| Chunks | 682, embedded with bge-small (384 dims); the index is 3.3 MB |
+| First index | 81 s on a laptop CPU, almost all of it embedding |
+| Re-index, nothing changed | 0.3 s, nothing re-embedded |
+| `tcg context` | 0.8 s from the CLI; about 6 ms per call in the running MCP server |
+| Tests | 420, no network needed |
+
+## Limitations
+
+- **Heuristic, not compiled.** A call's receiver type is known when the same file shows it (a
+  field, parameter or local variable). About half of all call sites qualify; chained calls
+  often don't. Every edge records how it was resolved, so guesses can be told from sure links.
+- Methods inherited from Spring Data (`findAll()` on a repository interface) have no nodes, so
+  calls to them aren't linked.
+- Search is vector-only, without keyword boosting.
+- Java and Spring conventions only; tested on one demo repository.
+
+## Next steps
+
+1. **Evaluation:** have an agent write tests for about 20 methods with and without
+   `get_test_context`, and compare how many compile, pass and add coverage.
+2. Hybrid search: keyword and vector.
+3. Gradle source sets (`src/integrationTest/`) and multi-module builds.
+
+## How it was built
+
+The design and the data contract ([`models.py`](src/test_context_graph/models.py)) came first.
+Then AI coding agents built the modules in parallel, each against the contract and with its own
+tests: a survey of the demo repository, the Java parser, the OpenAPI and Markdown parsers,
+storage and embeddings, the graph builder, and the context engine with its CLI and MCP server.
+Each module was checked on the real demo before being accepted. [`STATUS.md`](STATUS.md) and
+[`docs/work-packages.md`](docs/work-packages.md) record the plan and its progress.
+
+## Development
+
+```bash
+.venv/bin/python -m pytest -q                        # 420 tests, no network
+TCG_TEST_FASTEMBED=1 .venv/bin/python -m pytest -q   # also loads the real model
+```
+
+See [`AGENTS.md`](AGENTS.md) for the layout and the rules for contributors, human or AI.
+
+## License
+
+[MIT](LICENSE). The demo target, spring-petclinic-rest, is Apache-2.0 licensed and isn't included in this repository:
+`scripts/fetch-demo.sh` clones it into `.demo/`. The files in `examples/` are output generated
+from it.

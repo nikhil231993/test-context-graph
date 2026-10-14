@@ -46,6 +46,16 @@ class Embedder(Protocol):
 # ---- the local model ---------------------------------------------------------------------
 
 
+def default_cache_dir() -> Path:
+    """Where models are kept: $TCG_MODEL_CACHE, else ~/.cache/test-context-graph/models.
+
+    fastembed's own default is the temp folder, which an MCP client's minimal environment
+    doesn't share with the shell, so the model was downloaded again on every server start.
+    """
+    configured = os.environ.get("TCG_MODEL_CACHE")
+    return Path(configured).expanduser() if configured else Path.home() / ".cache" / "test-context-graph" / "models"
+
+
 class FastEmbedEmbedder:
     """A local ONNX model via fastembed; the model files are cached on disk after one download."""
 
@@ -56,7 +66,7 @@ class FastEmbedEmbedder:
         batch_size: int = 32,
     ) -> None:
         self.model_name = model_name
-        self.cache_dir = cache_dir
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else default_cache_dir()
         self.batch_size = batch_size
         self._model: Any = None
         self._dim: int | None = None
@@ -95,10 +105,12 @@ class FastEmbedEmbedder:
         if self._model is None:
             from fastembed import TextEmbedding
 
-            kwargs: dict[str, Any] = {}
-            if self.cache_dir is not None:
-                kwargs["cache_dir"] = str(self.cache_dir)
-            self._model = TextEmbedding(model_name=self.model_name, **kwargs)
+            cache = str(self.cache_dir)
+            try:
+                # Offline first: once the model is cached, loading it needs no network at all.
+                self._model = TextEmbedding(model_name=self.model_name, cache_dir=cache, local_files_only=True)
+            except Exception:  # fastembed raises various errors for "not cached yet"
+                self._model = TextEmbedding(model_name=self.model_name, cache_dir=cache)
         return self._model
 
 
