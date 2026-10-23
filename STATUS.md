@@ -50,7 +50,7 @@ target that drove the design: [`docs/demo-target-notes.md`](docs/demo-target-not
 | 9 | Evaluation: an agent writes tests with and without the context | `eval/` | later |
 | 10 | Code review: two review sub-agents (A: parsers, manifest, embeddings, store; B: graph, chunks, indexer, context, CLI, MCP, README), fixing proven bugs with tests | all modules | in progress (started 2026-10-14 15:10); afterwards commit + push |
 | 11 | **Broaden to most Java/Spring projects** (maintainer's goal, 2026-10-14): (a) measure on 6–8 varied open-source Spring projects with a re-runnable compatibility script; (b) fix the biggest gaps (likely: Lombok-generated constructors for INJECTS, Spring Data inherited methods, Gradle/multi-module source sets and project packages, mappings on hand-written interfaces, Feign/WebClient clients, WebTestClient/TestRestTemplate/RestAssured URLs, more roles); (c) re-measure, before/after table in README | graph.py, manifest.py, parser as needed; `eval/` | (a) measurement in progress (sub-agent, 2026-10-14 15:30, on a frozen copy of commit 780bed6); (b), (c) after package 10 |
-| 12 | **Outbound API calls + contract-test context for Specmatic** (maintainer's plan, 2026-10-23): 12a graph + MCP tools; 12b agent writes specmatic.yaml + examples; 12c CI runs Specmatic; 12d seed from WireMock stubs. Spec: docs/work-packages.md#12 | `http_calls.py`, `config.py`, `contract.py`, models, graph, manifest, indexer, server, cli | **12a, 12b, 12c done** (2026-10-23; demo in ~/Nikhil/specmatic-demo, see log); 12d next |
+| 12 | **Outbound API calls + contract-test context for Specmatic** (maintainer's plan, 2026-10-23): 12a graph + MCP tools; 12b agent writes specmatic.yaml + examples; 12c CI runs Specmatic; 12d seed from WireMock stubs. Spec: docs/work-packages.md#12 | `http_calls.py`, `config.py`, `contract.py`, models, graph, manifest, indexer, server, cli | **12a, 12b, 12c done** (2026-10-23; demo: github.com/nikhil231993/specmatic-contract-testing-demo); 12d next |
 
 "in progress (sub-agent)" means an agent was building it when this file was last updated. If the
 session that ran it is gone, check the package's files and tests (below) and finish it from its
@@ -71,6 +71,13 @@ its spec in `docs/work-packages.md`; mark it done here. Then start the first "to
 
 ## Log
 
+- 2026-10-23: demo moved into ONE public repo (maintainer's choice), merged with git subtree so the
+  history is kept: github.com/nikhil231993/specmatic-contract-testing-demo (`payments-provider/`,
+  `checkout-consumer/`, root CI workflows filtered by folder). Provider contract tests now run with
+  the Specmatic CLI (`scripts/contract-test.sh`, seed data from
+  `src/test/resources/specmatic/seed/payments.json` via `--payments.seed-file`; the real service
+  starts empty) plus unit tests of the business rules (idempotency 409s, refund balances, cancel).
+  Push to GitHub only through the `github-nikhil` SSH alias: the default key is another account.
 - 2026-10-23: **12b + 12c done: end-to-end demo** in `~/Nikhil/specmatic-demo/` (local git repos, not
   pushed): `payments-provider` (Spring Boot, implements CMPayments v1.14 from the maintainer's public
   github.com/nikhil231993/contract-api-specs; 29/29 Specmatic contract tests in `mvn verify`, 81%
