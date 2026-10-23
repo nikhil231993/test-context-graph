@@ -506,6 +506,22 @@ def test_string_arguments_concatenations_text_blocks_and_escapes():
     assert fourth.string_args == ["SELECT id\n  FROM loans\n"]
 
 
+def test_unicode_and_octal_escapes_decode_as_java_does():
+    method = parse_java(
+        "class S {\n"
+        '  @DisplayName("\\uD83D\\uDE00") void m() {\n'
+        '    log("\\uD83D\\uDE00 ok", "\\uD83D alone", "\\477", "\\101\\0");\n'
+        "  }\n"
+        "}\n",
+        "S.java",
+    ).types[0].methods[0]
+
+    # A Java string is UTF-16: the surrogate pair is one character, and a lone surrogate (which
+    # can't be written as UTF-8) becomes U+FFFD. A 3-digit octal escape starts with 0-3: \477 is \47 + 7.
+    assert method.annotations[0].arguments == {"value": "\U0001F600"}
+    assert method.calls[0].string_args == ["\U0001F600 ok", "� alone", "'7", "A\0"]
+
+
 def test_anonymous_class_is_not_a_type_and_its_calls_belong_to_the_enclosing_method():
     java_file = parse_fixture("JdbcBookRepository.java")
 

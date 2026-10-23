@@ -223,6 +223,17 @@ def test_json_indented_with_tabs(bookshop):
     assert spec.operations[0].line == 26
 
 
+def test_json_with_an_emoji_escaped_as_a_surrogate_pair():
+    # json.dumps writes 🐶 as "\ud83d\udc36": valid JSON that libyaml rejects as a whole
+    text = minimal_spec(paths={"/pets": {"get": {
+        "summary": "List pets \U0001F436",
+        "description": "Not an escape: C:\\ud83d\\udc36",  # backslashes in the text itself
+    }}})
+    assert "\\ud83d\\udc36" in text
+    [op] = parse_openapi(text, "s.json").operations
+    assert (op.summary, op.description) == ("List pets \U0001F436", "Not an escape: C:\\ud83d\\udc36")
+
+
 def test_swagger2():
     spec = parse_openapi(read("garden-swagger2.yml"), "garden.yml")
     assert (spec.title, spec.version, spec.base_path) == ("Garden", "1.0.0", "/garden/v1")

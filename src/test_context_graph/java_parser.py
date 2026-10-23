@@ -1016,7 +1016,9 @@ def _strip_generics(text: str) -> str:
 # ---- strings and text --------------------------------------------------------------------
 
 _ESCAPES = {"n": "\n", "t": "\t", "b": "\b", "r": "\r", "f": "\f", "s": " ", "0": "\0"}
-_ESCAPE_RE = re.compile(r"\\(u+[0-9a-fA-F]{4}|[0-7]{1,3}|\r?\n|.)", re.DOTALL)
+# A 3-digit octal escape starts with 0-3 (JLS 3.10.7): "\\477" is "\\47" then "7".
+_ESCAPE_RE = re.compile(r"\\(u+[0-9a-fA-F]{4}|[0-3][0-7]{2}|[0-7]{1,2}|\r?\n|.)", re.DOTALL)
+_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 def _string_value(node: Node) -> str:
@@ -1049,7 +1051,12 @@ def _unescape(text: str) -> str:
             return ""  # a line continuation in a text block
         return _ESCAPES.get(escape, escape)
 
-    return _ESCAPE_RE.sub(replace, text) if "\\" in text else text
+    if "\\" not in text:
+        return text
+    value = _ESCAPE_RE.sub(replace, text)
+    if _SURROGATE.search(value):  # Java strings are UTF-16: join pairs, a lone half becomes U+FFFD
+        value = value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+    return value
 
 
 # A text block, string or char literal; or a gap: whitespace and comments.

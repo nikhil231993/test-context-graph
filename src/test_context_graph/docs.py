@@ -44,7 +44,9 @@ def parse_markdown(text: str, path: str) -> list[DocSection]:
     """One section per heading, from its line to the line before the next heading of any level
     (so subsections are sections of their own), plus a level 0 section for any text before the
     first heading."""
-    lines = _LINE_BREAK.split(text.removeprefix("\ufeff"))
+    # CommonMark replaces NUL with U+FFFD; _plain also uses NUL to mark the text it sets aside.
+    text = text.removeprefix("\ufeff").replace("\x00", "\ufffd")
+    lines = _LINE_BREAK.split(text)
     if lines[-1] == "":
         lines.pop()  # the line break that ends the last line
     headings = _find_headings(lines)

@@ -190,6 +190,12 @@ def test_anchors_are_github_slugs_of_the_heading_text():
     ]
 
 
+def test_a_nul_in_a_heading_becomes_a_replacement_character():
+    # As CommonMark says. Unreplaced, "\x001\x00" was taken for a set-aside code span, and raised.
+    [section] = parse("# Step \x001\x00 `code`")
+    assert (section.heading, section.anchor) == ("Step �1� code", "step-1-code")
+
+
 def test_duplicate_anchors_get_numbered_like_github():
     sections = parse("# A", "# A-1", "# A", "# A", "## B")
     assert [s.anchor for s in sections] == ["a", "a-1", "a-2", "a-3", "b"]

@@ -102,6 +102,7 @@ _BEAN_ROLES = frozenset(
     {"controller", "controller_advice", "service", "repository", "mapper", "config", "test",
      "test_support", "api_interface"}  # fmt: skip
 )
+_COMPONENTS = frozenset({"Component", "Named"})  # beans whose role is still "other"
 _TEST_ROLES = frozenset({"test", "test_support"})
 _SETUP_ANNOTATIONS = frozenset({"BeforeEach", "Before", "BeforeAll", "BeforeClass"})
 _NAME_STOP_TOKENS = frozenset(
@@ -892,7 +893,11 @@ class _TestContext:
                     continue
                 seen.add(dep.id)
                 family = {dep.id, *e.ancestors(dep.id)}
-                called = [i for i, (c, _) in enumerate(self.calls) if _owner_id(c) in family]
+                called = [
+                    i
+                    for i, (callee, edge) in enumerate(self.calls)
+                    if _owner_id(callee) in family and not _own_call(edge)
+                ]
                 calls = [self._call_info(self.calls[i][0]) for i in called]
                 entries.append((called[0] if called else len(self.calls), len(entries), {
                     "id": dep.id,
@@ -944,7 +949,7 @@ class _TestContext:
         items = []
         for callee, edge in self.calls:
             owner = _owner_id(callee)
-            if owner in on_deps or (owner in own and not self.is_method):
+            if (owner in on_deps and not _own_call(edge)) or (owner in own and not self.is_method):
                 continue
             items.append({
                 **self._call_info(callee),
@@ -957,6 +962,8 @@ class _TestContext:
                 self.notes.append(f"the call to {e.label(callee)} was matched by name only: "
                                   "check it")  # fmt: skip
         items.sort(key=lambda item: not item["same_type"])  # stable: source order otherwise
+        if len(items) > MAX_COLLABORATORS:
+            self.notes.append(f"{_count(len(items) - MAX_COLLABORATORS, 'more call')} left out")
         return items[:MAX_COLLABORATORS]
 
     def data_types(self, deps: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -988,7 +995,17 @@ class _TestContext:
     def _is_data(self, node: Node) -> bool:
         """Not a bean: beans are mocked or injected, data is built."""
         return (node.kind == TYPE and node.attrs.get("role") not in _BEAN_ROLES
-                and not self.e.edges_in(node.id, INJECTS))  # fmt: skip
+                and not any(map(self._bean_injection, self.e.edges_in(node.id, INJECTS))))  # fmt: skip
+
+    def _bean_injection(self, edge: Edge) -> bool:
+        """An injection Spring makes: an annotated field or setter, or a bean's constructor. A
+        plain class's constructor parameter (the Owner of an OwnerSavedEvent) is data."""
+        source = self.e.nodes.get(edge.source)
+        if source is None:
+            return False
+        a = source.attrs
+        return (edge.attrs.get("via") != "constructor" or a.get("role") in _BEAN_ROLES
+                or bool(_COMPONENTS & set(a.get("annotations") or [])))  # fmt: skip
 
     def _data_type(self, type_id: str, hows: list[str]) -> dict[str, Any]:
         e = self.e
@@ -1043,6 +1060,8 @@ class _TestContext:
                     "tested_by": [e.label(t) for t in tested[:MAX_TESTED_BY]],
                     "tested_by_count": len(tested),
                 })  # fmt: skip
+        if len(items) > MAX_ENDPOINTS:
+            self.notes.append(f"{_count(len(items) - MAX_ENDPOINTS, 'more endpoint')} left out")
         return items[:MAX_ENDPOINTS]
 
     # ---- existing tests ----------------------------------------------------------------------
@@ -1174,10 +1193,13 @@ class _TestContext:
             reasons.append(f"{text}, {link.relation}" if link.relation else text)
         return reasons[:5]
 
+    def _test_subclasses(self, type_id: str) -> list[str]:
+        return [t for t in self.e.descendants(type_id) if self.e.role(t) in _TEST_ROLES]
+
     def _subclasses(self, type_id: str) -> list[dict[str, Any]]:
         """Test classes extending this one: each runs its tests, often under other profiles."""
         e = self.e
-        subclasses = [t for t in e.descendants(type_id) if e.role(t) in _TEST_ROLES]
+        subclasses = self._test_subclasses(type_id)
         return [
             {"id": t, "name": e.nodes[t].name, "path": e.nodes[t].path,
              "annotations": e.nodes[t].attrs.get("annotations") or [],
@@ -1336,6 +1358,8 @@ class _TestContext:
         top = self.type
         while top.attrs.get("outer") and f"type:{top.attrs['outer']}" in e.nodes:
             top = e.nodes[f"type:{top.attrs['outer']}"]
+        if top.attrs.get("role") == "test":  # not OwnerTestsTests.java
+            return top.path or "", f"{top.name} is a test class: add the new tests to it"
         owners = sorted(
             {x.source for x in e.edges_in(top.id, TESTS)
              if x.attrs.get("reason") in ("name", "annotation") and x.source in e.nodes},
@@ -1349,7 +1373,7 @@ class _TestContext:
         for hit in hits:
             base = e.nodes[hit.type_id]
             if hit.weight >= W_SUPER and base.attrs.get("is_abstract"):
-                runs = len(self._subclasses(hit.type_id))
+                runs = len(self._test_subclasses(hit.type_id))
                 under = f" and runs under {_count(runs, 'subclass')} (profiles)" if runs else ""
                 advice += (f"; {base.name} tests what {top.name} implements{under}: add "
                            "integration tests there to cover every implementation")  # fmt: skip
@@ -1666,6 +1690,12 @@ def _via(via: str) -> str:
 def _owner_id(method_id: str) -> str:
     """method:org.example.Owner#getPet(String) -> type:org.example.Owner"""
     return "type:" + method_id[len("method:") :].split("#", 1)[0]
+
+
+def _own_call(edge: Edge) -> bool:
+    """x(), this.x() or super.x(): the class calls itself, even when the method is inherited
+    from a supertype that a dependency shares."""
+    return edge.attrs.get("resolution") == "same_type"
 
 
 def _param_types(method_id: str) -> list[str]:

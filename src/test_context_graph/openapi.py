@@ -24,6 +24,12 @@ _YAML_VERSION_KEY = re.compile(r"""^(["']?)(?:openapi|swagger)\1[ \t]*:[ \t]+["'
 _JSON_VERSION_KEY = re.compile(r""""(?:openapi|swagger)"\s*:\s*"?\d+\.\d""")
 _VERSION = re.compile(r"\d+\.\d")
 _SERVER_VARIABLE = re.compile(r"\{([^{}]+)\}")
+# A character outside the BMP escaped in JSON as a UTF-16 surrogate pair, as json.dumps writes 🐶:
+# "🐶". libyaml rejects it (PyYAML's own loader makes two lone surrogates instead). Only an
+# even run of backslashes may come before it: in "\\ud83d", the backslash is the escaped one.
+_SURROGATE_PAIR = re.compile(
+    r"(?<!\\)((?:\\\\)*)\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})"
+)
 
 Lines = dict[tuple[str, ...], int]
 
@@ -89,7 +95,7 @@ def _load(text: str, path: str) -> tuple[Any, yaml.Node | None]:
     """The document's data, and its node tree, which knows the line of every key."""
     if text.lstrip("﻿ \t\r\n").startswith("{"):
         # JSON may put tabs between tokens, YAML may not; valid JSON has none inside strings.
-        text = text.replace("\t", " ")
+        text = _SURROGATE_PAIR.sub(_join_surrogates, text.replace("\t", " "))
     loader = _SpecLoader(text)
     try:
         root = loader.get_single_node()
@@ -98,6 +104,11 @@ def _load(text: str, path: str) -> tuple[Any, yaml.Node | None]:
         raise ValueError(f"{path}: not valid YAML or JSON: {_describe(err)}") from err
     finally:
         loader.dispose()
+
+
+def _join_surrogates(match: re.Match[str]) -> str:
+    high, low = int(match.group(2), 16), int(match.group(3), 16)
+    return match.group(1) + chr(0x10000 + (high - 0xD800) * 0x400 + (low - 0xDC00))
 
 
 def _describe(err: yaml.YAMLError) -> str:

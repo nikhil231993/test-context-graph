@@ -48,7 +48,7 @@ target that drove the design: [`docs/demo-target-notes.md`](docs/demo-target-not
 | 7 | Context engine, CLI, MCP server | `context.py`, `cli.py`, `server.py` + tests | **done** (97 tests; demo checks pass for getOwner and findOwnerById, examples/ saved; `tcg context` 0.8 s, 1.0–1.5 s with the docs model) |
 | 8 | Run on petclinic, review, README results, example output | README, `examples/` | **done** (README: quick start, MCP setup, example, results, limitations; examples/ from package 7) |
 | 9 | Evaluation: an agent writes tests with and without the context | `eval/` | later |
-| 10 | Code review: two review sub-agents (A: parsers, manifest, embeddings, store; B: graph, chunks, indexer, context, CLI, MCP, README), fixing proven bugs with tests | all modules | in progress (started 2026-10-14 15:10); afterwards commit + push |
+| 10 | Code review: two review sub-agents (A: parsers, manifest, embeddings, store; B: graph, chunks, indexer, context, CLI, MCP, README), fixing proven bugs with tests | all modules | **done** (2026-10-23): fixes finished, each with a regression test that fails without it; see log |
 | 11 | **Broaden to most Java/Spring projects** (maintainer's goal, 2026-10-14): (a) measure on 6–8 varied open-source Spring projects with a re-runnable compatibility script; (b) fix the biggest gaps (likely: Lombok-generated constructors for INJECTS, Spring Data inherited methods, Gradle/multi-module source sets and project packages, mappings on hand-written interfaces, Feign/WebClient clients, WebTestClient/TestRestTemplate/RestAssured URLs, more roles); (c) re-measure, before/after table in README | graph.py, manifest.py, parser as needed; `eval/` | (a) measurement in progress (sub-agent, 2026-10-14 15:30, on a frozen copy of commit 780bed6); (b), (c) after package 10 |
 | 12 | **Outbound API calls + contract-test context for Specmatic** (maintainer's plan, 2026-10-23): 12a graph + MCP tools; 12b agent writes specmatic.yaml + examples; 12c CI runs Specmatic; 12d seed from WireMock stubs. Spec: docs/work-packages.md#12 | `http_calls.py`, `config.py`, `contract.py`, models, graph, manifest, indexer, server, cli | **12a, 12b, 12c done** (2026-10-23; demo: github.com/nikhil231993/specmatic-contract-testing-demo); 12d next |
 
@@ -71,6 +71,14 @@ its spec in `docs/work-packages.md`; mark it done here. Then start the first "to
 
 ## Log
 
+- 2026-10-23: **package 10 done.** The review agents' sessions ended mid-way (reports lost); their
+  edits were finished and checked: docs.py NUL -> U+FFFD (CommonMark; a NUL broke heading
+  parsing); java_parser string escapes as Java decodes them (UTF-16 surrogate pairs joined, lone
+  halves -> U+FFFD, 3-digit octal only from 0-3); openapi.py JSON surrogate-pair escapes; context.py
+  (own inherited calls not counted on a dependency, plain-class constructor parameters are data,
+  "N more ... left out" notes, a test-class target suggests itself). context.py had no tests:
+  added tests/test_context_review.py (4 fail without the fixes, 1 guard). 480 tests pass, 0 fail;
+  petclinic answers unchanged. Not reviewed: the package 12 modules (http_calls, config, contract).
 - 2026-10-23: demo moved into ONE public repo (maintainer's choice), merged with git subtree so the
   history is kept: github.com/nikhil231993/specmatic-contract-testing-demo (`payments-provider/`,
   `checkout-consumer/`, root CI workflows filtered by folder). Provider contract tests now run with
