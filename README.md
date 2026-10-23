@@ -122,6 +122,8 @@ tcg context 'OwnerRestControllerV1#getOwner'
 | `tcg tests <symbol>` | Existing tests of a symbol, and why each is related |
 | `tcg show <symbol>` | One node: attributes, edges and text |
 | `tcg stats` | What is indexed, when, and with which model |
+| `tcg calls [symbol]` | Outbound HTTP calls to other services, by provider, for contract tests |
+| `tcg contract <call>` | Everything to write a Specmatic consumer test for one call |
 
 A symbol can be `Type#method`, `Type.method`, a type name, a node id, a file path or an
 endpoint (`GET /owners/{ownerId}`). The index folder is `.tcg` unless `--index` or `TCG_INDEX`
@@ -130,8 +132,9 @@ and load offline once downloaded.
 
 ## Use it from an agent (MCP)
 
-`tcg-mcp` is an MCP server (stdio) with six tools: `get_test_context` (the one to call before
-writing a test), `search_code`, `get_node`, `get_neighbors`, `find_tests` and `index_status`.
+`tcg-mcp` is an MCP server (stdio) with eight tools: `get_test_context` (the one to call before
+writing a test), `search_code`, `get_node`, `get_neighbors`, `find_tests`, `index_status`, and
+for consumer contract tests `list_outbound_calls` and `get_contract_context` (see below).
 
 Claude Code:
 
@@ -187,6 +190,33 @@ its fields, from the OpenAPI schema it's generated from. For a service method,
 [`ClinicServiceImpl#findOwnerById`](examples/petclinic-findOwnerById-context.md) lists the
 repository to mock and finds the existing tests through the `ClinicService` interface: an
 abstract test class run under four database profiles.
+
+## Contract tests: the calls a system makes
+
+For [Specmatic](https://specmatic.io) consumer contract tests, an agent needs the other side of
+the graph: the provider endpoints this system **calls**. The indexer finds outbound HTTP calls
+made with Feign (`@FeignClient`), Spring HTTP interfaces (`@HttpExchange`, `@GetExchange`...),
+`RestTemplate`, `WebClient` and `RestClient`, and links each one to:
+
+- the request the code sends: method, path, query parameters, headers, body and response types;
+- its base URL and the property that sets it (from `@FeignClient(url)`, `@Value`,
+  `@ConfigurationProperties`, a `baseUrl(...)` in a `@Bean` or `@ImportHttpServices` config),
+  with the property's value per profile from `application*.properties|yml`;
+- the provider's operation, when the provider's spec is in the index (in a `contracts/`,
+  `clients/` or `providers/` folder), kept apart from the system's own API;
+- the entry points that make the call: the endpoint it serves, a `@KafkaListener` or a
+  `@Scheduled` job, with the call chain, which is what a consumer test drives.
+
+`get_contract_context` adds the property to override to point the consumer at the Specmatic mock
+(`orders.api.url=http://localhost:9000`) and a draft Specmatic example built from the code.
+Specmatic then judges the test: the consumer runs against a strict mock built from the
+provider's spec. Each call records how it was found (`resolution`), and the notes say when a base
+URL is hard-coded or a path isn't visible in code.
+
+```
+tcg calls                      # every outbound call, grouped by provider
+tcg contract "POST /orders"    # request, types, base-URL property, provider operation, draft example
+```
 
 ## Results on spring-petclinic-rest
 

@@ -16,6 +16,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from .context import ContextEngine, ContextError, render_markdown
+from .contract import ContractContext, render_call_markdown, render_calls_markdown
 
 INSTRUCTIONS = """\
 Context for writing tests in a Java Spring codebase, from an index built by `tcg index <repo>`.
@@ -23,7 +24,10 @@ To write or fix a test for a method or class, call get_test_context first: one c
 code, the dependencies to mock (and how existing tests mock them), the data types (generated
 DTOs with their OpenAPI fields), the endpoints it serves, existing tests to copy, conventions
 and a suggested test file. Use search_code to find code by meaning when you don't know the
-name, find_tests for the existing tests of a symbol, get_node and get_neighbors to explore."""
+name, find_tests for the existing tests of a symbol, get_node and get_neighbors to explore.
+For contract tests of this system as a consumer (Specmatic): list_outbound_calls lists the
+provider endpoints it calls, grouped by provider; get_contract_context gives one call's request,
+types, base-URL property, matching provider operation, entry points and a draft example."""
 
 mcp = FastMCP("test-context-graph", instructions=INSTRUCTIONS)
 
@@ -114,7 +118,7 @@ def get_neighbors(
 
     node_id: a node id from another tool (or any symbol get_node accepts).
     edge_kinds: CONTAINS, EXTENDS, IMPLEMENTS, INJECTS, CALLS, OVERRIDES, USES, SERVES, TESTS,
-    MOCKS, GENERATED_FROM, REFERENCES, MENTIONS (default: all).
+    MOCKS, GENERATED_FROM, REFERENCES, MENTIONS, CALLS_HTTP, CONFIGURED_BY, TARGETS (default: all).
     direction: "out" (from the node), "in" (to it) or "both".
     """
     return get_engine().neighbors(node_id, edge_kinds=edge_kinds, direction=direction, limit=limit)
@@ -126,6 +130,37 @@ def find_tests(symbol: str) -> dict[str, Any]:
     with why each is related (calls the method or its endpoint, tests the class or an interface
     it implements), their test methods, and subclasses that run them under other profiles."""
     return get_engine().find_tests(symbol)
+
+
+@mcp.tool(structured_output=False)
+def list_outbound_calls(symbol: str | None = None, format: str = "markdown") -> str | dict[str, Any]:
+    """The HTTP calls this system makes to other services (Feign clients, Spring HTTP
+    interfaces, RestTemplate, WebClient, RestClient), grouped by provider: the base-URL property
+    and its value per profile, and per call its method and path, the client, the method that
+    makes it, the provider spec operation it matches (if a spec is indexed), and an id to pass
+    to get_contract_context. Start here to write consumer contract tests.
+
+    symbol: only the calls this method or class makes, directly or through what it calls.
+    format: "markdown" (default) or "json".
+    """
+    result = ContractContext(get_engine()).outbound_calls(symbol)
+    return result if format == "json" else render_calls_markdown(result)
+
+
+@mcp.tool(structured_output=False)
+def get_contract_context(call: str, format: str = "markdown") -> str | dict[str, Any]:
+    """Everything to write a Specmatic consumer contract test for one outbound call: the
+    request the code sends (method, path, query, headers, body type with fields), the response
+    type, the base-URL property to point at the Specmatic mock (and its config per profile),
+    the provider operation it matches with its spec text, the entry points that make the call
+    (the endpoint, listener or job a test drives), existing tests, the caller's source, a draft
+    Specmatic example, and notes (hard-coded URLs, paths not visible in code).
+
+    call: an id from list_outbound_calls, "POST /orders", or a method making one call.
+    format: "markdown" (default) or "json".
+    """
+    result = ContractContext(get_engine()).call_context(call)
+    return result if format == "json" else render_call_markdown(result)
 
 
 @mcp.tool(structured_output=False)

@@ -1,0 +1,13 @@
+openapi: 3.0.1
+info:
+  title: Storefront API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api
+paths:
+  /checkout:
+    post:
+      operationId: checkout
+      responses:
+        "200":
+          description: The order status

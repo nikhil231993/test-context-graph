@@ -1,0 +1,67 @@
+openapi: 3.0.1
+info:
+  title: Orders API
+  version: 2.1.0
+paths:
+  /orders:
+    post:
+      operationId: placeOrder
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewOrder"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderReceipt"
+        "400":
+          description: Bad request
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderReceipt"
+components:
+  schemas:
+    NewOrder:
+      type: object
+      required: [sku, quantity]
+      properties:
+        sku:
+          type: string
+        quantity:
+          type: integer
+        shipTo:
+          type: object
+          properties:
+            city:
+              type: string
+    OrderReceipt:
+      type: object
+      properties:
+        id:
+          type: integer
+        status:
+          type: string
+          enum: [PLACED, REJECTED]

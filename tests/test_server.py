@@ -19,7 +19,7 @@ from test_context_graph.indexer import index_repo
 
 BOOKSHOP = Path(__file__).parent / "fixtures" / "bookshop"
 GET_BOOK = "method:com.example.bookshop.rest.controller.BookRestController#getBook(Integer)"
-TOOLS = {"get_test_context", "search_code", "get_node", "get_neighbors", "find_tests", "index_status"}
+TOOLS = {"get_test_context", "search_code", "get_node", "get_neighbors", "find_tests", "index_status", "list_outbound_calls", "get_contract_context"}
 
 
 @pytest.fixture(scope="module")

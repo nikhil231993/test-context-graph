@@ -858,6 +858,7 @@ def test_endpoint_node_from_the_spec(g):
         "url_path": "/garden/api/plants/{plantId}",
         "served_path": "/api/plants/{plantId}",
         "sources": ["openapi"],
+        "spec_role": "own",
     }
 
 

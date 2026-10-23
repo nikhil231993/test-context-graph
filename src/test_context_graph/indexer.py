@@ -6,25 +6,30 @@ Only chunks whose content changed are embedded again, because embedding is the s
 
 from __future__ import annotations
 
+import shutil
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
 from .chunks import make_chunks
+from .config import parse_config
 from .docs import parse_markdown
 from .embeddings import Embedder, default_embedder
 from .graph import build_graph
 from .java_parser import parse_java
 from .manifest import FileChanges, diff_files, git_commit, plan_chunks, scan_repo
-from .models import ApiSpec, Chunk, DocSection, FileEntry, Graph, JavaFile, Manifest
+from .models import (
+    ApiSpec, Chunk, ConfigProperty, DocSection, FileEntry, Graph, JavaFile, Manifest,
+)  # fmt: skip
 from .openapi import parse_openapi
 from .store import IndexStore
 
 EMBED_BATCH = 64
+PROVIDER_SPECS = "provider-specs"  # in the index folder: other systems' specs this code calls
 
 
 @dataclass
@@ -44,6 +49,7 @@ class Parsed:
     sources: dict[str, str] = field(default_factory=dict)  # Java path -> text, for chunks
     specs: list[ApiSpec] = field(default_factory=list)
     docs: list[DocSection] = field(default_factory=list)
+    config: list[ConfigProperty] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -64,6 +70,11 @@ def parse_files(root: Path, files: dict[str, FileEntry]) -> Parsed:
                 parsed.warnings.append(f"{path}: {exc}")
         elif entry.kind == "markdown":
             parsed.docs += parse_markdown(text, path)
+        elif entry.kind == "config":
+            try:
+                parsed.config += parse_config(text, path)
+            except ValueError as exc:
+                parsed.warnings.append(f"{path}: {exc}")
     return parsed
 
 
@@ -86,8 +97,13 @@ def index_repo(
     embedder: Embedder | None = None,
     full: bool = False,
     progress: Callable[[int, int], None] | None = None,
+    provider_specs: Sequence[str | Path] = (),
 ) -> IndexResult:
-    """Index `repo` into `index_dir`. A second run on an unchanged repo embeds nothing."""
+    """Index `repo` into `index_dir`. A second run on an unchanged repo embeds nothing.
+
+    provider_specs: OpenAPI files of other systems this code calls (found elsewhere, e.g. with
+    ghes-openapi-mcp). They're copied into the index folder, so later runs keep them, and
+    indexed as provider specs: outbound calls link to their operations (TARGETS)."""
     started = time.monotonic()
     root = Path(repo).resolve()
     store = IndexStore(index_dir)
@@ -97,7 +113,8 @@ def index_repo(
     files = scan_repo(root)
     changes = diff_files(previous.files if previous else {}, files)
     parsed = parse_files(root, files)
-    graph = build_graph(parsed.java_files, parsed.specs, parsed.docs)
+    parsed.specs += _provider_specs(Path(index_dir), provider_specs, parsed.warnings)
+    graph = build_graph(parsed.java_files, parsed.specs, parsed.docs, parsed.config)
     chunks = make_chunks(graph, parsed.java_files, parsed.sources, parsed.specs, parsed.docs)
 
     # The table's own hashes, not the manifest's: they're right even after an interrupted run.
@@ -140,3 +157,24 @@ def index_repo(
         warnings=parsed.warnings,
         seconds=round(time.monotonic() - started, 2),
     )
+
+
+def _provider_specs(index_dir: Path, new: Sequence[str | Path], warnings: list[str]) -> list[ApiSpec]:
+    """Copy new provider specs into the index folder, then parse every one kept there."""
+    folder = index_dir / PROVIDER_SPECS
+    for source in map(Path, new):
+        if not source.is_file():
+            raise FileNotFoundError(f"provider spec not found: {source}")
+        folder.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, folder / source.name)
+    specs = []
+    for spec_file in sorted(folder.glob("*")) if folder.is_dir() else []:
+        path = f"{PROVIDER_SPECS}/{spec_file.name}"
+        try:
+            spec = parse_openapi(spec_file.read_text(encoding="utf-8", errors="replace"), path)
+        except ValueError as exc:
+            warnings.append(f"{path}: {exc}")
+            continue
+        spec.role = "provider"
+        specs.append(spec)
+    return specs

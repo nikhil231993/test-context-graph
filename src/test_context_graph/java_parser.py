@@ -43,6 +43,7 @@ from .models import (
     TypeRef,
 )
 
+MAX_ARG_TEXT = 200  # CallSite.args: a long lambda argument is cut here
 _LANGUAGE = Language(tree_sitter_java.language())
 _PARSER = Parser(_LANGUAGE)
 
@@ -831,7 +832,8 @@ def _looks_like_type(name: str) -> bool:
 def _arguments(args: Node | None) -> dict[str, Any]:
     values = _named(args)
     strings = [s for s in map(_string_arg, values) if s is not None]
-    return {"arg_count": len(values), "string_args": strings}
+    texts = [_one_line(_text(value))[:MAX_ARG_TEXT] for value in values]
+    return {"arg_count": len(values), "string_args": strings, "args": texts}
 
 
 def _string_arg(node: Node) -> str | None:

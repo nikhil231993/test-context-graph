@@ -1,0 +1,15 @@
+orders:
+  api:
+    url: ${ORDERS_API_URL:http://localhost:8091}
+stock:
+  api:
+    url: http://localhost:8092
+    password: not-a-real-one
+---
+spring:
+  config:
+    activate:
+      on-profile: docker
+orders:
+  api:
+    url: http://orders:8080

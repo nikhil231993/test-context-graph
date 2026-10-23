@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import is_config_file
 from .models import Chunk, FileEntry
 
 # Build output, dependencies, IDE and tool folders. Any other hidden folder is skipped too.
@@ -25,7 +26,7 @@ HEAD_BYTES = 4096  # how much of a YAML/JSON file classify() sees to tell a spec
 
 _SPEC_SUFFIXES = (".yml", ".yaml", ".json")
 _MARKDOWN_SUFFIXES = (".md", ".markdown")
-_SUFFIXES = frozenset((".java", *_SPEC_SUFFIXES, *_MARKDOWN_SUFFIXES))
+_SUFFIXES = frozenset((".java", ".properties", *_SPEC_SUFFIXES, *_MARKDOWN_SUFFIXES))
 
 
 # ---- what a file is -----------------------------------------------------------------------
@@ -41,6 +42,8 @@ def classify(path: str, head: str) -> tuple[str, str] | None:
         kind = "markdown"
     elif suffix in _SPEC_SUFFIXES and looks_like_spec(head):
         kind = "openapi"
+    elif is_config_file(path):  # application*.properties|yml|yaml, bootstrap*
+        kind = "config"
     else:
         return None
     return kind, source_set(path)

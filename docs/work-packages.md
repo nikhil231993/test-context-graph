@@ -203,3 +203,63 @@ end-to-end run shows; add results and usage to the README; commit an `examples/`
 
 Pick ~20 methods; have an agent write a test for each with and without `get_test_context`; compare
 how many compile, pass, and add coverage. Report the numbers in the README.
+
+## 10. Code review
+
+Two review sub-agents, each on its own half (A: java_parser, openapi, docs, manifest, embeddings,
+store; B: graph, chunks, indexer, context, cli, server, README accuracy). They fix only proven
+bugs, each with a regression test, and report larger issues. Done when both reports are in, the
+full suite passes and the demo answers are unchanged; then commit and push.
+
+## 11. Most Java and Spring projects
+
+Java only. Priority patterns: Lombok, Gradle + multi-module, microservice clients, messaging and jobs.
+
+- **(a) Measure.** `eval/corpus.yaml` lists 6–8 varied open-source Spring projects (pinned
+  commits, licences noted) covering Maven and Gradle, single- and multi-module, Lombok, WebFlux,
+  Feign/WebClient/RestTemplate clients, @KafkaListener/@Scheduled, JUnit 4 and 5. `eval/compat.py`
+  clones them into `.demo/corpus/`, indexes each with HashEmbedder, and writes
+  `docs/compatibility.md`: per project, crashes, parse errors, files by source set, call
+  resolution rate, mapped endpoints found vs mapping annotations in code, controllers/services
+  with dependencies found, test classes linked to what they test, role coverage, two sample
+  `tcg context` checks, and counts of the priority patterns with what the tool did with them.
+  Ends with the gaps ranked by impact, each with real examples.
+- **(b) Fix** the top gaps, as work packages split by file ownership.
+- **(c) Re-measure**; before/after table in the README.
+
+
+## 12. Outbound API calls and contract-test context (Specmatic)
+
+Goal: an agent asks "which provider endpoints does this system call, and with what?", and gets
+enough to write Specmatic consumer contract tests: `specmatic.yaml`, example JSON files (the
+requests the code really sends) and the base-URL override. Specmatic, not the agent, then
+judges them: the consumer runs against a strict Specmatic mock built from the provider's spec.
+
+Stages:
+
+- **12a. Graph (this repo).**
+  - `CallSite.args`: each argument's source text, one line (for `Product.class`,
+    `HttpMethod.POST`, `baseUrl + "/x"`).
+  - Config files: `application*.properties|yml|yaml` and `bootstrap*` are indexed (kind
+    `config`); `config.py` parses them to `ConfigProperty` (key, value, line, profile). Values
+    of secret-looking keys are masked. Node `config:<path>#<key>`.
+  - `http_calls.py` (pure) finds outbound HTTP calls: Feign (`@FeignClient`) and Spring HTTP
+    interfaces (`@HttpExchange`, `@GetExchange`...), `RestTemplate`, `WebClient` and `RestClient`
+    chains. Node `http_call`, with: client, HTTP method, path template, query and header names,
+    request body and response types, base URL (literal or `${property}`), and how each was found.
+  - Edges: `CALLS_HTTP` method -> http_call; `CONFIGURED_BY` http_call -> config (base URL);
+    `TARGETS` http_call -> endpoint, when an indexed spec has a matching operation.
+  - `contract.py` + MCP tools `list_outbound_calls(symbol?)` and `get_contract_context(call)`:
+    per call, the call site and its callers, request/response type fields, the base-URL property
+    per profile, the matched spec operation, and existing tests. CLI `tcg calls`.
+  - Done when: fixture tests for each client style pass; the full suite passes; a real
+    open-source Java consumer gives its outbound calls with correct paths.
+- **12b. Agent writes the Specmatic files** for one open-source Java consumer, from the tools
+  above; the provider spec is found with ghes-openapi-mcp (`find_openapi_spec`) and recorded in
+  `specmatic.yaml`, which is the single "where are the specs" file.
+- **12c. Pipeline**: CI checks the examples against the spec, then runs the consumer against the
+  Specmatic mock; a demo where a changed provider spec fails the build.
+- **12d.** Seed examples from existing WireMock stubs (artifactory-mocks-mcp).
+
+Open questions for the maintainer: Specmatic edition (open-source `io.specmatic` vs
+Enterprise); the open-source Java consumer to demo on.

@@ -17,6 +17,7 @@ from typing import Any
 
 from . import __version__
 from .context import CHUNK_KINDS, ContextEngine, ContextError, embedder_for_model, render_markdown
+from .contract import ContractContext, render_call_markdown, render_calls_markdown
 from .embeddings import Embedder, default_embedder
 from .store import IndexStore
 
@@ -68,6 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_argument("repo", help="the repository folder")
     sub.add_argument("--full", action="store_true", help="embed every chunk again")
     sub.add_argument(
+        "--provider-spec",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="an OpenAPI spec of another system this code calls (repeatable); kept in the index",
+    )
+    sub.add_argument(
         "--embedder",
         choices=("fastembed", "hash"),
         help="fastembed (local model) or hash (no model, for tests); default: $TCG_EMBEDDER, "
@@ -107,6 +115,12 @@ def build_parser() -> argparse.ArgumentParser:
     about = "a node: its attributes, edges and text"
     command("show", cmd_show, about, index, as_json).add_argument("symbol")
     command("stats", cmd_stats, "what is indexed, when and with which model", index, as_json)
+    about = "outbound HTTP calls to other services, by provider (for contract tests)"
+    sub = command("calls", cmd_calls, about, index, as_json)
+    sub.add_argument("symbol", nargs="?", help="only the calls this method or class makes")
+    about = "everything needed to write a Specmatic consumer test for one outbound call"
+    sub = command("contract", cmd_contract, about, index, as_json)
+    sub.add_argument("call", help='an id from `tcg calls`, "POST /orders", or a method')
     return parser
 
 
@@ -123,7 +137,8 @@ def cmd_index(args: argparse.Namespace) -> int:
     embedder = _index_embedder(args.embedder, index_dir)
     print(f"indexing {repo} into {index_dir} with {embedder.model_name}", file=sys.stderr)
     progress = _Progress()
-    result = index_repo(repo, index_dir, embedder, full=args.full, progress=progress)
+    result = index_repo(repo, index_dir, embedder, full=args.full, progress=progress,
+                        provider_specs=args.provider_spec)
     progress.finish()
     files, counts = result.files, result.counts
     again = "; all embedded again: first run, --full or a new model"
@@ -171,6 +186,16 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 def cmd_stats(args: argparse.Namespace) -> int:
     _print(_engine(args).stats(), args.json, _stats_text)
+    return 0
+
+
+def cmd_calls(args: argparse.Namespace) -> int:
+    _print(ContractContext(_engine(args)).outbound_calls(args.symbol), args.json, render_calls_markdown)
+    return 0
+
+
+def cmd_contract(args: argparse.Namespace) -> int:
+    _print(ContractContext(_engine(args)).call_context(args.call), args.json, render_call_markdown)
     return 0
 
 

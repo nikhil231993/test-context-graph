@@ -64,7 +64,10 @@ services:
         ("src/test/postman/README.MD", ("markdown", "test")),
         ("notes.txt", None),
         ("pom.xml", None),
-        ("src/main/resources/application.properties", None),
+        ("src/main/resources/application.properties", ("config", "main")),
+        ("src/test/resources/application-test.yml", ("config", "test")),
+        ("src/main/resources/bootstrap.yaml", ("config", "main")),
+        ("src/main/resources/logback.properties", None),
     ],
 )
 def test_classify_by_extension_and_source_set(path, expected):
@@ -77,8 +80,8 @@ def test_classify_finds_specs_by_their_content():
     assert classify("api/petstore.json", '{"swagger": "2.0", "info": {}}') == ("openapi", "other")
 
 
-def test_classify_ignores_config_yaml_and_json_that_are_not_specs():
-    assert classify("src/main/resources/application.yml", APPLICATION_YML) is None
+def test_classify_ignores_yaml_and_json_that_are_neither_specs_nor_spring_config():
+    assert classify("src/main/resources/application.yml", APPLICATION_YML) == ("config", "main")
     assert classify("docker-compose.yml", DOCKER_COMPOSE_YML) is None
     package_json = '{"name": "ui", "dependencies": {"swagger": "0.7.5"}}'
     assert classify("frontend/package.json", package_json) is None

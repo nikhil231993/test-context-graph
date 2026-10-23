@@ -20,15 +20,20 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from .http_calls import HttpCallFact, client_env, find_http_calls, module_of
 from .manifest import source_set
 from .models import (
     CALLS,
+    CALLS_HTTP,
+    CONFIG,
+    CONFIGURED_BY,
     CONTAINS,
     DOC,
     ENDPOINT,
     EXTENDS,
     FILE,
     GENERATED_FROM,
+    HTTP_CALL,
     IMPLEMENTS,
     INJECTS,
     MENTIONS,
@@ -38,6 +43,7 @@ from .models import (
     REFERENCES,
     SCHEMA,
     SERVES,
+    TARGETS,
     TESTS,
     TYPE,
     USES,
@@ -45,6 +51,7 @@ from .models import (
     ApiOperation,
     ApiSpec,
     CallSite,
+    ConfigProperty,
     DocSection,
     Edge,
     FieldDecl,
@@ -56,10 +63,12 @@ from .models import (
     Parameter,
     TypeDecl,
     TypeRef,
+    config_id,
     doc_id,
     endpoint_id,
     erase,
     file_id,
+    http_call_id,
     join_paths,
     method_id,
     schema_id,
@@ -155,6 +164,10 @@ _METHOD_TYPE_PARAMS = re.compile(r"^(?:[a-z]+\s+)*<(.*?)>\s")  # "public <T> T f
 _SHORT_FORM = re.compile(r"[\w.$-]+(?:<[\w.$<>, -]*>)?")  # "Owner", "array<Owner>"
 _SHORT_FORM_NAME = re.compile(r"[\w.$-]+")
 _IDENTIFIER = re.compile(r"[A-Za-z_$][\w$]*")
+_TYPE_NAME = re.compile(r"[A-Za-z_$][\w$.]*")
+_PROVIDER_DIR = re.compile(
+    r"/(?:contracts?|providers?|downstream|dependencies|consumes|clients?|external|specmatic)/"
+)
 _PATH_TOKEN = re.compile(r"(?<![\w/{}.-])/[\w/{}.-]*")  # "/api/owners/{}" in prose
 
 
@@ -165,10 +178,12 @@ def build_graph(
     java_files: Sequence[JavaFile],
     specs: Sequence[ApiSpec] = (),
     docs: Sequence[DocSection] = (),
+    config: Sequence[ConfigProperty] = (),
 ) -> Graph:
-    """The context graph of a codebase: its files, types, methods, endpoints, schemas and doc
-    sections, and the edges between them (see models.py for the kinds)."""
-    return _Builder(java_files, specs, docs).build()
+    """The context graph of a codebase: its files, types, methods, endpoints, schemas, doc
+    sections, config properties and outbound HTTP calls, and the edges between them (see
+    models.py for the kinds)."""
+    return _Builder(java_files, specs, docs, config).build()
 
 
 def project_prefix(packages: Iterable[str]) -> str:
@@ -349,9 +364,15 @@ class _Call:
 
 class _Builder:
     def __init__(
-        self, java_files: Sequence[JavaFile], specs: Sequence[ApiSpec], docs: Sequence[DocSection]
+        self,
+        java_files: Sequence[JavaFile],
+        specs: Sequence[ApiSpec],
+        docs: Sequence[DocSection],
+        config: Sequence[ConfigProperty] = (),
     ) -> None:
         self.index = TypeIndex(java_files)
+        self.config = sorted(config, key=lambda c: (c.path, c.line, c.key))
+        self.config_by_key: dict[str, list[str]] = defaultdict(list)  # relaxed key -> node ids
         self.files = sorted(java_files, key=lambda f: f.path)
         self.specs = sorted(specs, key=lambda s: s.path)
         self.docs = sorted(docs, key=lambda d: (d.path, d.start_line, d.anchor))
@@ -364,7 +385,8 @@ class _Builder:
         self.overridden: dict[str, list[str]] = defaultdict(list)  # method id -> its supers
         self.calls: dict[str, list[_Call]] = {}  # method id -> its resolved call sites
         self.mocked: dict[str, set[str]] = defaultdict(set)  # test type -> mocked types
-        self.spec_endpoints: list[Node] = []  # endpoints from specs, sorted; set by _serves
+        self.spec_endpoints: list[Node] = []  # endpoints of own specs, sorted; set by _serves
+        self.provider_endpoints: list[Node] = []  # endpoints of provider specs; set by _serves
         self._ancestor_cache: dict[str, list[str]] = {}
         self._name_only_cache: dict[tuple[str, str, int, bool], list[str]] = {}
 
@@ -377,6 +399,8 @@ class _Builder:
         self._overrides()
         self._calls()
         self._serves()
+        self._config_nodes()
+        self._http_calls()
         self._tests()
         self._generated_from()
         self._references()
@@ -471,10 +495,11 @@ class _Builder:
             attrs = {
                 "language": "openapi", "source_set": source_set(spec.path), "title": spec.title,
                 "version": spec.version, "base_path": spec.base_path,
+                "spec_role": _role(spec),
             }  # fmt: skip
             self._add_node(fid, FILE, _basename(spec.path), spec.path, attrs=attrs)
             for op in spec.operations:
-                eid = endpoint_id(op.method, op.path)
+                eid = _spec_endpoint_id(spec, op)
                 name = f"{op.method.upper()} {op.path}"
                 attrs = _endpoint_attrs(spec, op)
                 self._add_node(eid, ENDPOINT, name, spec.path, op.line, attrs=attrs)
@@ -487,6 +512,80 @@ class _Builder:
                 }  # fmt: skip
                 self._add_node(sid, SCHEMA, schema.name, spec.path, schema.line, attrs=attrs)
                 self._add_edge(CONTAINS, fid, sid)
+
+    def _config_nodes(self) -> None:
+        for path in dict.fromkeys(c.path for c in self.config):
+            attrs = {"language": "config", "source_set": source_set(path)}
+            self._add_node(file_id(path), FILE, _basename(path), path, attrs=attrs)
+        for c in self.config:
+            cid = config_id(c.path, c.key)
+            if cid in self.nodes:  # the same key in another YAML document (another profile)
+                cid = f"{cid}@{c.profile or c.line}"
+            attrs = {"key": c.key, "value": c.value, "profile": c.profile,
+                     "source_set": source_set(c.path)}  # fmt: skip
+            self._add_node(cid, CONFIG, c.key, c.path, c.line, c.line, attrs)
+            self._add_edge(CONTAINS, file_id(c.path), cid)
+            self.config_by_key[_relaxed(c.key)].append(cid)
+
+    # -- HTTP_CALL, CALLS_HTTP, CONFIGURED_BY, TARGETS
+
+    def _http_calls(self) -> None:
+        main = [t for t in self.types.values() if t.source_set == "main"]
+        by_module: dict[str, list[_Type]] = defaultdict(list)
+        for t in main:  # each module is its own application: its own beans and config
+            by_module[module_of(t.file.path)].append(t)
+        envs = {
+            module: client_env({t.file.path: t.file for t in ts}.values())
+            for module, ts in by_module.items()
+        }
+        # Provider specs first; an own spec's endpoint this code doesn't serve may be another
+        # system's spec kept outside a contracts/ folder. A served one is never a target.
+        served = {target for kind, _, target in self.edges if kind == SERVES}
+        unserved = [ep for ep in self.spec_endpoints if ep.id not in served]
+        for t in main:
+            for fact in find_http_calls(t.decl, envs[module_of(t.file.path)]):
+                self._add_http_call(t, fact, self.provider_endpoints, unserved)
+
+    def _add_http_call(
+        self, t: _Type, fact: HttpCallFact, providers: list[Node], unserved: list[Node]
+    ) -> None:
+        m = fact.method
+        mid = method_id(t.qname, m.name, [p.type for p in m.parameters])
+        hid = http_call_id(mid, fact.line)
+        attrs = _http_call_attrs(fact)
+        for role, text in (("request", fact.request_body), ("response", fact.response)):
+            found = self._types_in_text(t, text)
+            attrs[f"{role}_type"] = type_id(found[0]) if found else None
+            for qname in found:
+                self._add_edge(USES, hid, type_id(qname), {"as": role})
+        name = f"{fact.http_method or '?'} {fact.path or '?'}"
+        self._add_node(hid, HTTP_CALL, name, t.file.path, fact.line, fact.line, attrs)
+        self._add_edge(CALLS_HTTP, mid, hid, {"line": fact.line})
+        keys = fact.property_keys
+        if not keys and fact.client == "feign" and fact.service and not fact.base_url:
+            keys = [f"spring.cloud.openfeign.client.config.{fact.service}.url",
+                    f"feign.client.config.{fact.service}.url"]  # fmt: skip
+        module = module_of(t.file.path)
+        for key in keys:
+            for cid in self.config_by_key.get(_relaxed(key), []):
+                if module_of(self.nodes[cid].path or "") == module:
+                    self._add_edge(CONFIGURED_BY, hid, cid, {"as": "base_url"})
+        if fact.path:
+            for candidates, match in ((providers, "provider_spec"), (unserved, "unserved_spec")):
+                found = match_url(fact.path, fact.http_method, candidates)
+                for eid in found:
+                    self._add_edge(TARGETS, hid, eid, {"match": match})
+                if found:
+                    break
+
+    def _types_in_text(self, t: _Type, text: str | None) -> list[str]:
+        """Project types named in a type as written: "List<Order>" -> [the Order type]."""
+        found = []
+        for name in _TYPE_NAME.findall(text or ""):
+            qname = self._resolve(t, name)
+            if qname and qname not in found:
+                found.append(qname)
+        return found
 
     def _doc_nodes(self) -> None:
         for path in sorted({s.path for s in self.docs}):
@@ -681,14 +780,22 @@ class _Builder:
     def _serves(self) -> None:
         operations: dict[str, list[tuple[str, list[str]]]] = defaultdict(list)
         for spec in self.specs:
+            if _role(spec) != "own":
+                continue  # another system's operations: this code calls them, never serves them
             for op in spec.operations:
                 if op.operation_id:  # openapi-generator puts untagged operations in DefaultApi
                     eid = endpoint_id(op.method, op.path)
                     operations[op.operation_id].append((eid, op.tags or ["default"]))
         all_tags = {tag for ops in operations.values() for _, tags in ops for tag in tags}
         tag_apis = {_api_name(tag) for tag in all_tags}
-        self.spec_endpoints = [n for n in self._endpoints() if "openapi" in n.attrs["sources"]]
-        serving = [t for t in self.types.values() if t.source_set != "test"]
+        spec_endpoints = [n for n in self._endpoints() if "openapi" in n.attrs["sources"]]
+        self.spec_endpoints = [n for n in spec_endpoints if n.attrs["spec_role"] == "own"]
+        self.provider_endpoints = [n for n in spec_endpoints if n.attrs["spec_role"] == "provider"]
+        # A Feign client's mapping annotations describe the calls it makes, not routes it serves.
+        serving = [
+            t for t in self.types.values()
+            if t.source_set != "test" and not _annotation(t.decl.annotations, "FeignClient")
+        ]  # fmt: skip
         for t in serving:
             if t.role == "controller" or self._api_stubs(t):
                 self._serve_by_operation_id(t, operations, tag_apis)
@@ -902,7 +1009,7 @@ class _Builder:
         for spec in self.specs:
             names = {s.name for s in spec.schemas}
             for op in spec.operations:
-                eid = endpoint_id(op.method, op.path)
+                eid = _spec_endpoint_id(spec, op)
                 for name in _schema_refs(op.request_body, names):
                     self._add_edge(REFERENCES, eid, schema_id(spec.path, name), {"as": "request"})
                 for status, value in op.responses.items():
@@ -971,6 +1078,7 @@ def _type_attrs(t: _Type) -> dict[str, Any]:
         "extends": [r.text for r in d.extends],
         "implements": [r.text for r in d.implements],
         "fields": [_field_attrs(f) for f in d.fields],
+        "record_components": [{"name": p.name, "type": p.type.text} for p in d.record_components],
         "is_abstract": "abstract" in d.modifiers,
         "external": False,
         "generated": False,
@@ -997,6 +1105,7 @@ def _stub_attrs(qname: str, role: str) -> dict[str, Any]:
         "extends": [],
         "implements": [],
         "fields": [],
+        "record_components": [],
         "is_abstract": False,
         "external": True,
         "generated": True,
@@ -1039,8 +1148,49 @@ def _endpoint_attrs(spec: ApiSpec, op: ApiOperation) -> dict[str, Any]:
         "responses": dict(op.responses),
         "url_path": join_paths(spec.base_path, op.path),
         "served_path": None,  # set by SERVES: controller prefix + spec path
+        "spec_role": _role(spec),
         "sources": ["openapi"],
     }
+
+
+def spec_role(path: str) -> str:
+    """"provider" for another system's spec checked into this repo (a contracts/ or clients/
+    folder...), else "own": the API this system serves."""
+    return "provider" if _PROVIDER_DIR.search("/" + path.lower()) else "own"
+
+
+def _role(spec: ApiSpec) -> str:
+    return spec.role or spec_role(spec.path)
+
+
+def _spec_endpoint_id(spec: ApiSpec, op: ApiOperation) -> str:
+    """A provider spec's endpoints carry the spec path, so a BFF serving POST /orders and
+    calling its provider's POST /orders gets two nodes."""
+    eid = endpoint_id(op.method, op.path)
+    return f"{eid}@{spec.path}" if _role(spec) == "provider" else eid
+
+
+def _http_call_attrs(fact: HttpCallFact) -> dict[str, Any]:
+    return {
+        "client": fact.client,
+        "http_method": fact.http_method,
+        "path": fact.path,
+        "query": list(fact.query),
+        "headers": list(fact.headers),
+        "request_body": fact.request_body,
+        "response": fact.response,
+        "base_url": fact.base_url,
+        "base_url_via": fact.base_url_via,
+        "base_url_properties": fact.property_keys,
+        "service": fact.service,
+        "resolution": fact.resolution,
+        "notes": list(fact.notes),
+    }
+
+
+def _relaxed(key: str) -> str:
+    """Spring's relaxed binding: base-url, baseUrl and base_url are the same property."""
+    return re.sub(r"[-_]", "", key).lower()
 
 
 def _code_endpoint_attrs(verb: str, path: str) -> dict[str, Any]:

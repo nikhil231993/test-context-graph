@@ -123,6 +123,10 @@ class CallSite:
     # put("/api/owners/" + ownerId + "/pets") -> ["/api/owners/{}/pets"]. Other arguments are
     # skipped. Lets graph.py link MockMvc calls in tests to endpoints.
     string_args: list[str] = field(default_factory=list)
+    # Every argument's source text on one line, in order (cut at 200 characters):
+    # exchange(url, HttpMethod.POST, entity, Order.class) -> ["url", "HttpMethod.POST", "entity",
+    # "Order.class"]. Lets http_calls.py see class literals, HTTP methods and URL variables.
+    args: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -222,6 +226,9 @@ class ApiSpec:
     base_path: str = ""  # path part of servers[0].url: "/petclinic/api"; "" if none
     operations: list[ApiOperation] = field(default_factory=list)
     schemas: list[ApiSchema] = field(default_factory=list)
+    # "provider": another system's spec this code calls (tcg index --provider-spec); "own": the
+    # API it serves. None: graph.spec_role decides from the folder.
+    role: str | None = None
 
 
 # ---- Docs: docs.parse_markdown() returns DocSections -----------------------------------
@@ -239,6 +246,20 @@ class DocSection:
     breadcrumbs: list[str] = field(default_factory=list)  # parent headings, outermost first
 
 
+# ---- Config: config.parse_config() returns ConfigProperties ------------------------------
+
+
+@dataclass
+class ConfigProperty:
+    """One Spring property from application*.properties / application*.yml (or bootstrap*)."""
+
+    path: str
+    key: str  # flattened: "order.api.url", "spring.cloud.openfeign.client.config.orders.url"
+    value: str  # as written, "${ORDER_API_URL:http://localhost:8090}"; "***" for secret keys
+    line: int
+    profile: str | None = None  # "dev" for application-dev.yml or an on-profile YAML document
+
+
 # ---- The graph: graph.build_graph() returns a Graph, stored as nodes.json / edges.json ----
 
 # Node kinds
@@ -248,6 +269,8 @@ METHOD = "method"
 ENDPOINT = "endpoint"
 SCHEMA = "schema"
 DOC = "doc"
+CONFIG = "config"  # a Spring property: config:<path>#<key>
+HTTP_CALL = "http_call"  # an outbound HTTP call this code makes: http_call:<method id>@<line>
 
 # Edge kinds (source -> target)
 CONTAINS = "CONTAINS"  # file -> type, type -> nested type, type -> method
@@ -256,13 +279,17 @@ IMPLEMENTS = "IMPLEMENTS"  # type -> type
 INJECTS = "INJECTS"  # type -> type it receives as a dependency; attrs: via (constructor|field|setter), name
 CALLS = "CALLS"  # method -> method; attrs: line, resolution (receiver_type|same_type|name_only)
 OVERRIDES = "OVERRIDES"  # method -> the method it overrides or implements
-USES = "USES"  # method -> project type in its signature or body; attrs: as (parameter|return|new)
+USES = "USES"  # method -> project type in its signature or body; attrs: as (parameter|return|new);
+#   http_call -> its request or response body type; attrs: as (request|response)
 SERVES = "SERVES"  # method -> endpoint; attrs: via (annotation|operation_id)
 TESTS = "TESTS"  # test method/type -> method/type/endpoint it tests; attrs: reason
 MOCKS = "MOCKS"  # test type -> type it replaces with a mock; attrs: via (MockitoBean, MockBean, Mock, mock())
 GENERATED_FROM = "GENERATED_FROM"  # generated type (not in source) -> schema it's generated from
 REFERENCES = "REFERENCES"  # endpoint -> schema (attrs: as = request|response); schema -> schema
 MENTIONS = "MENTIONS"  # doc -> type/endpoint named in its text
+CALLS_HTTP = "CALLS_HTTP"  # method -> http_call it makes; attrs: line
+CONFIGURED_BY = "CONFIGURED_BY"  # http_call -> config property; attrs: as (base_url)
+TARGETS = "TARGETS"  # http_call -> endpoint of an indexed spec it matches; attrs: match
 
 
 def join_paths(*parts: str) -> str:
@@ -300,6 +327,14 @@ def doc_id(path: str, anchor: str) -> str:
     return f"doc:{path}#{anchor}" if anchor else f"doc:{path}"
 
 
+def config_id(path: str, key: str) -> str:
+    return f"config:{path}#{key}"
+
+
+def http_call_id(source_method_id: str, line: int) -> str:
+    return f"http_call:{source_method_id.removeprefix('method:')}@{line}"
+
+
 @dataclass
 class Node:
     """ids (use the helpers above):  file:<path>   type:<qualified name>
@@ -309,7 +344,9 @@ class Node:
     An endpoint's <path> is the OpenAPI path as written in the spec ("/owners/{ownerId}"), or for
     an endpoint found only in code, its mapped path ("/api/owners/{ownerId}"). The paths it's
     served at are in attrs: served_path (controller prefix + spec path, what MockMvc calls) and
-    url_path (spec base path + spec path, what a client calls)."""
+    url_path (spec base path + spec path, what a client calls). An endpoint of a provider spec
+    (another system's, in a contracts/ or clients/ folder: graph.spec_role) has the spec path
+    appended, endpoint:POST /orders@contracts/orders.yml, so it never merges with an own one."""
 
     id: str
     kind: str
@@ -358,7 +395,7 @@ class FileEntry:
     path: str
     sha256: str
     size: int
-    kind: str  # "java", "openapi" or "markdown"
+    kind: str  # "java", "openapi", "markdown" or "config"
     source_set: str  # "main", "test" or "other"
 
 
